@@ -20,24 +20,27 @@
   // =========================================================================
 
   const KEYBINDINGS = [
-    {
-      key: "u",
-      selector: "input.tcv_button_distance",
-      label: "Distance Measurement",
-    },
+    // Measurement tools
+    { key: "u", shift: false, selector: "input.tcv_button_distance", label: "Distance Measurement" },
+    { key: "u", shift: true,  selector: "input.tcv_button_properties", label: "Properties" },
+
+    // Camera views (number keys → toolbar order)
+    { key: "0", shift: false, selector: "input.tcv_button_iso",    label: "Iso View" },
+    { key: "1", shift: false, selector: "input.tcv_button_front",  label: "Front View" },
+    { key: "2", shift: false, selector: "input.tcv_button_rear",   label: "Back View" },
+    { key: "3", shift: false, selector: "input.tcv_button_top",    label: "Top View" },
+    { key: "4", shift: false, selector: "input.tcv_button_bottom", label: "Bottom View" },
+    { key: "5", shift: false, selector: "input.tcv_button_left",   label: "Left View" },
+    { key: "6", shift: false, selector: "input.tcv_button_right",  label: "Right View" },
+
     // --- Add more bindings here ---
-    // Example:
-    // {
-    //   key: "a",
-    //   selector: "input.tcv_button_angle",
-    //   label: "Angle Measurement",
-    // },
   ];
 
-  // Build a lookup map: key -> binding
+  // Build a lookup map: "shift+key" or "key" -> binding
   const KEY_MAP = {};
   for (const binding of KEYBINDINGS) {
-    KEY_MAP[binding.key] = binding;
+    var mapKey = (binding.shift ? "shift+" : "") + binding.key;
+    KEY_MAP[mapKey] = binding;
   }
 
   // =========================================================================
@@ -125,13 +128,14 @@
       return;
     }
 
-    // Skip when modifier keys are held
+    // Skip when ctrl/alt/meta are held (allow shift through)
     if (event.ctrlKey || event.altKey || event.metaKey) {
       return;
     }
 
     var pressed = event.key.toLowerCase();
-    var binding = KEY_MAP[pressed];
+    var mapKey = (event.shiftKey ? "shift+" : "") + pressed;
+    var binding = KEY_MAP[mapKey];
     if (!binding) return;
 
     var button = findButton(binding.selector);
@@ -142,8 +146,17 @@
 
     button.click();
 
-    var active = isButtonActive(button);
-    showToast(binding.label + (active ? " ON" : " OFF"), active);
+    // Toggle buttons show ON/OFF; one-shot buttons (views) just show the label
+    var frame = button.closest(FRAME_SELECTOR);
+    var isToggle = frame && frame.classList.contains(ACTIVE_CLASS) !== undefined;
+    var wasToggled = isButtonActive(button);
+
+    // View buttons don't have a persistent active state — just confirm the action
+    if (binding.selector.match(/_(iso|front|rear|top|bottom|left|right)$/)) {
+      showToast(binding.label, true);
+    } else {
+      showToast(binding.label + (wasToggled ? " ON" : " OFF"), wasToggled);
+    }
   }
 
   // =========================================================================

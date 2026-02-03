@@ -4,11 +4,26 @@ Chrome extension that adds keyboard shortcuts to the [OCP CAD Viewer](https://gi
 
 ## Keybindings
 
+### Tools
+
 | Key | Action |
 |-----|--------|
-| `U` | Toggle distance measurement mode |
+| `u` | Toggle distance measurement |
+| `Shift+u` | Toggle properties panel |
 
-A toast notification confirms when measurement mode is toggled ON/OFF.
+### Camera Views
+
+| Key | Action |
+|-----|--------|
+| `0` | Iso view |
+| `1` | Front view |
+| `2` | Back view |
+| `3` | Top view |
+| `4` | Bottom view |
+| `5` | Left view |
+| `6` | Right view |
+
+A toast notification confirms each action.
 
 ## Install
 
@@ -25,13 +40,20 @@ Edit the `KEYBINDINGS` array at the top of `content.js`:
 
 ```js
 const KEYBINDINGS = [
-  { key: "u", selector: "input.tcv_button_distance", label: "Distance Measurement" },
-  // Add more:
-  // { key: "a", selector: "input.tcv_button_angle", label: "Angle Measurement" },
+  { key: "u", shift: false, selector: "input.tcv_button_distance", label: "Distance Measurement" },
+  { key: "u", shift: true,  selector: "input.tcv_button_properties", label: "Properties" },
+  { key: "0", shift: false, selector: "input.tcv_button_iso",    label: "Iso View" },
+  // ...
 ];
 ```
 
-Each entry maps a key to a toolbar button CSS selector. The toolbar buttons follow the pattern `input.tcv_button_<name>` inside a `span.tcv_button_frame`.
+Each entry needs:
+- `key` — the keyboard key (lowercase)
+- `shift` — whether Shift must be held (`true` / `false`)
+- `selector` — CSS selector for the toolbar button
+- `label` — toast message text
+
+Toolbar buttons follow the pattern `input.tcv_button_<name>` inside `span.tcv_button_frame`.
 
 ## How it works
 
@@ -39,7 +61,8 @@ Each entry maps a key to a toolbar button CSS selector. The toolbar buttons foll
 - Polls for the three-cad-viewer toolbar (built dynamically after WebSocket data arrives)
 - On keypress, finds and clicks the matching toolbar button
 - Detects active state via `tcv_btn_click2` class on the button frame
-- Ignores keypresses in input fields and when modifier keys are held
+- Ignores keypresses in input fields and when Ctrl/Alt/Meta are held
+- Shift is supported as a modifier (e.g. `Shift+u` for properties)
 
 ## License
 
