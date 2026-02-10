@@ -187,7 +187,11 @@
         newText = originalMm.toFixed(3);
       }
 
-      cell.textContent = newText;
+      // Only write if the text actually changed (avoid unnecessary DOM mutations
+      // that can trigger the viewer's MutationObserver feedback loop)
+      if (cell.textContent !== newText) {
+        cell.textContent = newText;
+      }
       cellTextCache.set(cell, newText);
     }
   }
@@ -198,7 +202,9 @@
       var cell = cells[i];
       if (cellMmCache.has(cell)) {
         var mmText = cellMmCache.get(cell).toFixed(3);
-        cell.textContent = mmText;
+        if (cell.textContent !== mmText) {
+          cell.textContent = mmText;
+        }
         cellTextCache.set(cell, mmText);
         cellMmCache.delete(cell);
       }
@@ -449,81 +455,6 @@
     });
   }
 
-  function createCopyButton(row, isCoords) {
-    var btn = document.createElement("button");
-    btn.className = "ocp-copy-coords-btn";
-    btn.textContent = "📋";
-    btn.title = isCoords ? "Copy coordinates" : "Copy value";
-    Object.assign(btn.style, {
-      marginLeft: "6px",
-      padding: "2px 5px",
-      border: "1px solid #666",
-      borderRadius: "3px",
-      background: "#333",
-      color: "#fff",
-      cursor: "pointer",
-      fontSize: "10px",
-      lineHeight: "1",
-      verticalAlign: "middle",
-    });
-
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var th = row.querySelector("th.tcv_measure_key");
-      var label = th ? th.textContent.replace(/📋/g, "").trim() : "value";
-
-      if (isCoords) {
-        copyCoords(row, label);
-      } else {
-        copySingleValue(row, label);
-      }
-    });
-
-    return btn;
-  }
-
-  // Create a small copy button for individual cell values
-  function createCellCopyButton(cell, axis) {
-    var btn = document.createElement("button");
-    btn.className = "ocp-copy-cell-btn";
-    btn.textContent = "📋";
-    btn.title = "Copy " + axis + " value";
-    Object.assign(btn.style, {
-      marginLeft: "4px",
-      padding: "1px 3px",
-      border: "1px solid #555",
-      borderRadius: "2px",
-      background: "#2a2a2a",
-      color: "#fff",
-      cursor: "pointer",
-      fontSize: "8px",
-      lineHeight: "1",
-      verticalAlign: "middle",
-      opacity: "0.7",
-    });
-
-    btn.addEventListener("mouseenter", function () {
-      btn.style.opacity = "1";
-    });
-    btn.addEventListener("mouseleave", function () {
-      btn.style.opacity = "0.7";
-    });
-
-    btn.addEventListener("click", function (e) {
-      e.stopPropagation();
-      var val = getCellValue(cell);
-      var text = val.toFixed(3);
-
-      navigator.clipboard.writeText(text).then(function () {
-        showToast("Copied " + axis + ": " + text, true);
-      }).catch(function () {
-        showToast("Copy failed", false);
-      });
-    });
-
-    return btn;
-  }
-
   // Check if row is a Reference row (should not get copy button)
   function isReferenceRow(row) {
     var th = row.querySelector("th.tcv_measure_key");
@@ -532,62 +463,150 @@
     return label.startsWith("reference");
   }
 
-  function addCopyButtonsToPanel() {
-    // Process both properties and distance panels
+  // =========================================================================
+  // Copy Button Overlay System
+  //
+  // IMPORTANT: Copy buttons are placed in a separate overlay container
+  // OUTSIDE the viewer's measurement panels. This prevents our DOM
+  // modifications from triggering the viewer's MutationObserver, which
+  // would cause an infinite feedback loop:
+  //   our DOM change -> viewer observer fires -> viewer re-requests data
+  //   -> backend responds -> viewer rebuilds panel -> we add buttons again
+  //   -> viewer observer fires -> ...
+  //
+  // Instead, we position absolute buttons that visually appear next to
+  // the panel rows but live in a separate DOM subtree.
+  // =========================================================================
+
+  var overlayContainer = null;
+  var lastOverlaySignature = "";
+
+  function getOverlayContainer() {
+    if (!overlayContainer) {
+      overlayContainer = document.createElement("div");
+      overlayContainer.id = "ocp-copy-overlay";
+      Object.assign(overlayContainer.style, {
+        position: "fixed",
+        top: "0",
+        left: "0",
+        width: "0",
+        height: "0",
+        overflow: "visible",
+        pointerEvents: "none",
+        zIndex: "999997",
+      });
+      document.body.appendChild(overlayContainer);
+    }
+    return overlayContainer;
+  }
+
+  function createOverlayCopyButton(label, clickHandler) {
+    var btn = document.createElement("button");
+    btn.className = "ocp-copy-overlay-btn";
+    btn.textContent = "\u{1F4CB}";
+    btn.title = "Copy " + label;
+    Object.assign(btn.style, {
+      position: "absolute",
+      padding: "2px 5px",
+      border: "1px solid #666",
+      borderRadius: "3px",
+      background: "#333",
+      color: "#fff",
+      cursor: "pointer",
+      fontSize: "10px",
+      lineHeight: "1",
+      pointerEvents: "auto",
+      opacity: "0.8",
+    });
+
+    btn.addEventListener("mouseenter", function () {
+      btn.style.opacity = "1";
+    });
+    btn.addEventListener("mouseleave", function () {
+      btn.style.opacity = "0.8";
+    });
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      e.preventDefault();
+      clickHandler();
+    });
+
+    return btn;
+  }
+
+  function buildOverlaySignature() {
+    // Build a signature from visible panel content to detect real changes
+    var sig = "";
+    var panels = document.querySelectorAll(PROPERTIES_PANEL_SELECTOR + ", " + DISTANCE_PANEL_SELECTOR);
+    for (var i = 0; i < panels.length; i++) {
+      var panel = panels[i];
+      if (panel.style.display === "none") continue;
+      var rows = panel.querySelectorAll("tr");
+      for (var j = 0; j < rows.length; j++) {
+        var th = rows[j].querySelector("th.tcv_measure_key");
+        if (th) sig += th.textContent.trim() + ";";
+      }
+      sig += "|";
+    }
+    return sig;
+  }
+
+  function updateCopyButtonOverlay() {
+    // Only rebuild if panel content actually changed
+    var sig = buildOverlaySignature();
+    if (sig === lastOverlaySignature) return;
+    lastOverlaySignature = sig;
+
+    var container = getOverlayContainer();
+    // Clear old buttons
+    container.innerHTML = "";
+
     var panels = document.querySelectorAll(PROPERTIES_PANEL_SELECTOR + ", " + DISTANCE_PANEL_SELECTOR);
 
     for (var i = 0; i < panels.length; i++) {
       var panel = panels[i];
-      var rows = panel.querySelectorAll("tr");
+      if (panel.style.display === "none") continue;
 
+      var rows = panel.querySelectorAll("tr");
       for (var j = 0; j < rows.length; j++) {
         var row = rows[j];
         var th = row.querySelector("th.tcv_measure_key");
         if (!th) continue;
-        if (isReferenceRow(row)) continue; // Skip reference rows
+        if (isReferenceRow(row)) continue;
 
-        // Check for x/y/z coordinates
         var xCell = row.querySelector(".tcv_x_measure_val");
         var yCell = row.querySelector(".tcv_y_measure_val");
         var zCell = row.querySelector(".tcv_z_measure_val");
         var hasCoords = xCell && yCell && zCell;
 
+        // Position a copy button at the right edge of the row header
+        var thRect = th.getBoundingClientRect();
+
         if (hasCoords) {
-          // Add main copy button to header (if not already present)
-          if (!th.querySelector(".ocp-copy-coords-btn")) {
-            th.appendChild(createCopyButton(row, true));
-          }
-
-          // Add individual cell copy buttons
-          if (!xCell.querySelector(".ocp-copy-cell-btn")) {
-            xCell.appendChild(createCellCopyButton(xCell, "X"));
-          }
-          if (!yCell.querySelector(".ocp-copy-cell-btn")) {
-            yCell.appendChild(createCellCopyButton(yCell, "Y"));
-          }
-          if (!zCell.querySelector(".ocp-copy-cell-btn")) {
-            zCell.appendChild(createCellCopyButton(zCell, "Z"));
-          }
-          continue;
-        }
-
-        // Check for single value (Area, Angle, distance, angle)
-        if (!th.querySelector(".ocp-copy-coords-btn")) {
-          var valueCells = row.querySelectorAll(".tcv_measure_val");
-          var hasSingleValue = false;
-          for (var k = 0; k < valueCells.length; k++) {
-            var cell = valueCells[k];
-            if (!cell.classList.contains("tcv_x_measure_val") &&
-                !cell.classList.contains("tcv_y_measure_val") &&
-                !cell.classList.contains("tcv_z_measure_val")) {
-              hasSingleValue = true;
-              break;
-            }
-          }
-
-          if (hasSingleValue) {
-            th.appendChild(createCopyButton(row, false));
-          }
+          // Row-level copy (all coords)
+          (function (r) {
+            var btn = createOverlayCopyButton("coordinates", function () {
+              var label = r.querySelector("th.tcv_measure_key");
+              var lbl = label ? label.textContent.trim() : "value";
+              copyCoords(r, lbl);
+            });
+            btn.style.top = (thRect.top + thRect.height / 2 - 8) + "px";
+            btn.style.left = (thRect.right + 4) + "px";
+            container.appendChild(btn);
+          })(row);
+        } else {
+          // Single value copy
+          (function (r) {
+            var btn = createOverlayCopyButton("value", function () {
+              var label = r.querySelector("th.tcv_measure_key");
+              var lbl = label ? label.textContent.trim() : "value";
+              copySingleValue(r, lbl);
+            });
+            btn.style.top = (thRect.top + thRect.height / 2 - 8) + "px";
+            btn.style.left = (thRect.right + 4) + "px";
+            container.appendChild(btn);
+          })(row);
         }
       }
     }
@@ -595,7 +614,9 @@
 
   function startCopyBtnPoll() {
     if (copyBtnPollTimer) return;
-    copyBtnPollTimer = setInterval(addCopyButtonsToPanel, COPY_BTN_POLL_MS);
+    // Poll at a moderate rate but NEVER modify the viewer's panel DOM.
+    // We only read positions and update our external overlay.
+    copyBtnPollTimer = setInterval(updateCopyButtonOverlay, COPY_BTN_POLL_MS);
   }
 
   // =========================================================================
